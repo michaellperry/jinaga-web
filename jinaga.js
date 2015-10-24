@@ -423,16 +423,27 @@ var JinagaCoordinator = (function () {
         this.messages.save(message, null);
     };
     JinagaCoordinator.prototype.watch = function (start, templates, resultAdded, resultRemoved) {
+        var watch = null;
         var query = parse(templates);
         var inverses = QueryInverter.invertQuery(query);
         if (inverses.length > 0) {
-            this.watches.push(new Watch(start, query, resultAdded, resultRemoved, inverses));
+            watch = new Watch(start, query, resultAdded, resultRemoved, inverses);
+            this.watches.push(watch);
         }
         this.messages.executeQuery(start, query, function (error, results) {
             results.map(resultAdded);
         }, this);
         if (this.network) {
             this.network.watch(start, query);
+        }
+        return watch;
+    };
+    JinagaCoordinator.prototype.removeWatch = function (watch) {
+        for (var index = 0; index < this.watches.length; ++index) {
+            if (this.watches[index] === watch) {
+                this.watches.splice(index, 1);
+                return;
+            }
         }
     };
     JinagaCoordinator.prototype.onSaved = function (fact, source) {
@@ -476,6 +487,17 @@ var JinagaCoordinator = (function () {
     };
     return JinagaCoordinator;
 })();
+var WatchProxy = (function () {
+    function WatchProxy(coordinator, watch) {
+        this.coordinator = coordinator;
+        this.watch = watch;
+    }
+    WatchProxy.prototype.stop = function () {
+        if (this.watch)
+            this.coordinator.removeWatch(this.watch);
+    };
+    return WatchProxy;
+})();
 var Jinaga = (function () {
     function Jinaga() {
         this.coordinator = new JinagaCoordinator();
@@ -491,7 +513,8 @@ var Jinaga = (function () {
         this.coordinator.fact(message);
     };
     Jinaga.prototype.watch = function (start, templates, resultAdded, resultRemoved) {
-        this.coordinator.watch(start, templates, resultAdded, resultRemoved);
+        var watch = this.coordinator.watch(start, templates, resultAdded, resultRemoved);
+        return new WatchProxy(this.coordinator, watch);
     };
     Jinaga.prototype.where = function (specification, conditions) {
         return new Interface.ConditionalSpecification(specification, conditions, true);
