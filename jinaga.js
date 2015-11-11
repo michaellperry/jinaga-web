@@ -372,10 +372,18 @@ var JinagaDistributor = (function () {
             fact: fact
         }));
     };
+    JinagaDistributor.prototype.login = function () {
+        this.socket.send(JSON.stringify({
+            type: "login"
+        }));
+    };
     JinagaDistributor.prototype.onMessage = function (message) {
         var messageObj = JSON.parse(message);
         if (messageObj.type === "fact") {
-            this.coordinator.onReceived(messageObj.fact, this);
+            this.coordinator.onReceived(messageObj.fact, null, this);
+        }
+        if (messageObj.type === "loggedIn") {
+            this.coordinator.onLoggedIn(messageObj.userFact);
         }
     };
     return JinagaDistributor;
@@ -407,6 +415,9 @@ var JinagaCoordinator = (function () {
         this.watches = [];
         this.messages = null;
         this.network = null;
+        this.loggedIn = false;
+        this.userFact = null;
+        this.loginCallbacks = [];
     }
     JinagaCoordinator.prototype.save = function (storage) {
         this.messages = storage;
@@ -430,9 +441,9 @@ var JinagaCoordinator = (function () {
             watch = new Watch(start, query, resultAdded, resultRemoved, inverses);
             this.watches.push(watch);
         }
-        this.messages.executeQuery(start, query, function (error, results) {
+        this.messages.executeQuery(start, query, this.userFact, function (error, results) {
             results.map(resultAdded);
-        }, this);
+        });
         if (this.network) {
             this.network.watch(start, query);
         }
@@ -446,24 +457,37 @@ var JinagaCoordinator = (function () {
             }
         }
     };
+    JinagaCoordinator.prototype.login = function (callback) {
+        if (this.loggedIn) {
+            callback(this.userFact);
+        }
+        else if (this.network) {
+            this.loginCallbacks.push(callback);
+            this.network.login();
+        }
+        else {
+            callback(null);
+        }
+    };
     JinagaCoordinator.prototype.onSaved = function (fact, source) {
+        var _this = this;
         if (source === null) {
             this.messages.push(fact);
         }
         this.watches.map(function (watch) {
             watch.inverses.map(function (inverse) {
-                this.messages.executeQuery(fact, inverse.affected, function (error2, affected) {
+                _this.messages.executeQuery(fact, inverse.affected, _this.userFact, function (error2, affected) {
                     if (!error2) {
                         if (_some(affected, function (obj) { return _isEqual(obj, watch.start); })) {
                             if (inverse.added && watch.resultAdded) {
-                                this.messages.executeQuery(fact, inverse.added, function (error3, added) {
+                                _this.messages.executeQuery(fact, inverse.added, _this.userFact, function (error3, added) {
                                     if (!error3) {
                                         added.map(watch.resultAdded);
                                     }
                                 });
                             }
                             if (inverse.removed && watch.resultRemoved) {
-                                this.messages.executeQuery(fact, inverse.removed, function (error2, added) {
+                                _this.messages.executeQuery(fact, inverse.removed, _this.userFact, function (error2, added) {
                                     if (!error2) {
                                         added.map(watch.resultRemoved);
                                     }
@@ -471,9 +495,9 @@ var JinagaCoordinator = (function () {
                             }
                         }
                     }
-                }, this);
-            }, this);
-        }, this);
+                });
+            });
+        });
     };
     JinagaCoordinator.prototype.onReceived = function (fact, source) {
         this.messages.save(fact, source);
@@ -484,6 +508,14 @@ var JinagaCoordinator = (function () {
     JinagaCoordinator.prototype.send = function (fact, source) {
         if (this.network)
             this.network.fact(fact);
+    };
+    JinagaCoordinator.prototype.onLoggedIn = function (userFact) {
+        this.userFact = userFact;
+        this.loggedIn = true;
+        this.loginCallbacks.forEach(function (callback) {
+            callback(userFact);
+        });
+        this.loginCallbacks = [];
     };
     return JinagaCoordinator;
 })();
@@ -515,6 +547,9 @@ var Jinaga = (function () {
     Jinaga.prototype.watch = function (start, templates, resultAdded, resultRemoved) {
         var watch = this.coordinator.watch(JSON.parse(JSON.stringify(start)), templates, resultAdded, resultRemoved);
         return new WatchProxy(this.coordinator, watch);
+    };
+    Jinaga.prototype.login = function (callback) {
+        this.coordinator.login(callback);
     };
     Jinaga.prototype.where = function (specification, conditions) {
         return new Interface.ConditionalSpecification(specification, conditions, true);
@@ -576,10 +611,10 @@ var MemoryProvider = (function () {
     MemoryProvider.prototype.save = function (fact, source) {
         this.insertNode(fact, source);
     };
-    MemoryProvider.prototype.executeQuery = function (start, query, result, thisArg) {
+    MemoryProvider.prototype.executeQuery = function (start, query, readerFact, result) {
         var startingNode = this.findNode(start);
         if (!startingNode) {
-            result.bind(thisArg)(null, []);
+            result(null, []);
             return;
         }
         var nodes = this.queryNodes(startingNode, query.steps);
@@ -587,7 +622,7 @@ var MemoryProvider = (function () {
         nodes.forEach(function (node) {
             facts.push(node.fact);
         });
-        result.bind(thisArg)(null, facts);
+        result(null, facts);
     };
     MemoryProvider.prototype.queryNodes = function (startingNode, steps) {
         var _this = this;
