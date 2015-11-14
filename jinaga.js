@@ -353,29 +353,50 @@ var engine = require("engine.io-client");
 var Socket = engine.Socket;
 var JinagaDistributor = (function () {
     function JinagaDistributor(endpoint) {
+        var _this = this;
+        this.isOpen = false;
+        this.pending = [];
         this.socket = new Socket(endpoint);
-        this.socket.on("message", this.onMessage.bind(this));
+        this.socket.on("open", function () { _this.onOpen(); });
+        this.socket.on("message", function (message) { _this.onMessage(message); });
     }
     JinagaDistributor.prototype.init = function (coordinator) {
         this.coordinator = coordinator;
     };
     JinagaDistributor.prototype.watch = function (start, query) {
-        this.socket.send(JSON.stringify({
+        this.send(JSON.stringify({
             type: "watch",
             start: start,
             query: query.toDescriptiveString()
         }));
     };
+    JinagaDistributor.prototype.query = function (start, query, token) {
+        this.send(JSON.stringify({
+            type: "query",
+            start: start,
+            query: query.toDescriptiveString(),
+            token: token
+        }));
+    };
     JinagaDistributor.prototype.fact = function (fact) {
-        this.socket.send(JSON.stringify({
+        this.send(JSON.stringify({
             type: "fact",
             fact: fact
         }));
     };
-    JinagaDistributor.prototype.login = function () {
-        this.socket.send(JSON.stringify({
-            type: "login"
-        }));
+    JinagaDistributor.prototype.send = function (message) {
+        if (this.isOpen)
+            this.socket.send(message);
+        else
+            this.pending.push(message);
+    };
+    JinagaDistributor.prototype.onOpen = function () {
+        var _this = this;
+        this.isOpen = true;
+        this.pending.forEach(function (message) {
+            _this.socket.send(message);
+        });
+        this.pending = [];
     };
     JinagaDistributor.prototype.onMessage = function (message) {
         var messageObj = JSON.parse(message);
@@ -383,7 +404,10 @@ var JinagaDistributor = (function () {
             this.coordinator.onReceived(messageObj.fact, null, this);
         }
         if (messageObj.type === "loggedIn") {
-            this.coordinator.onLoggedIn(messageObj.userFact);
+            this.coordinator.onLoggedIn(messageObj.userFact, messageObj.profile);
+        }
+        if (messageObj.type === "done") {
+            this.coordinator.onDone(messageObj.token);
         }
     };
     return JinagaDistributor;
@@ -417,7 +441,10 @@ var JinagaCoordinator = (function () {
         this.network = null;
         this.loggedIn = false;
         this.userFact = null;
+        this.profile = null;
         this.loginCallbacks = [];
+        this.nextToken = 1;
+        this.queries = [];
     }
     JinagaCoordinator.prototype.save = function (storage) {
         this.messages = storage;
@@ -449,6 +476,23 @@ var JinagaCoordinator = (function () {
         }
         return watch;
     };
+    JinagaCoordinator.prototype.query = function (start, templates, done) {
+        var _this = this;
+        var query = parse(templates);
+        var executeQueryLocal = function () {
+            _this.messages.executeQuery(start, query, _this.userFact, function (error, results) {
+                done(results);
+            });
+        };
+        if (this.network) {
+            this.queries.push({ token: this.nextToken, callback: executeQueryLocal });
+            this.network.query(start, query, this.nextToken);
+            this.nextToken++;
+        }
+        else {
+            executeQueryLocal();
+        }
+    };
     JinagaCoordinator.prototype.removeWatch = function (watch) {
         for (var index = 0; index < this.watches.length; ++index) {
             if (this.watches[index] === watch) {
@@ -459,14 +503,13 @@ var JinagaCoordinator = (function () {
     };
     JinagaCoordinator.prototype.login = function (callback) {
         if (this.loggedIn) {
-            callback(this.userFact);
+            callback(this.userFact, this.profile);
         }
         else if (this.network) {
             this.loginCallbacks.push(callback);
-            this.network.login();
         }
         else {
-            callback(null);
+            callback(null, null);
         }
     };
     JinagaCoordinator.prototype.onSaved = function (fact, source) {
@@ -502,6 +545,19 @@ var JinagaCoordinator = (function () {
     JinagaCoordinator.prototype.onReceived = function (fact, source) {
         this.messages.save(fact, source);
     };
+    JinagaCoordinator.prototype.onDone = function (token) {
+        var index = -1;
+        for (var i = 0; i < this.queries.length; i++) {
+            var query = this.queries[i];
+            if (query.token === token) {
+                index = i;
+                break;
+            }
+        }
+        if (index >= 0) {
+            this.queries.splice(index, 1)[0].callback();
+        }
+    };
     JinagaCoordinator.prototype.onError = function (err) {
         debug(err);
     };
@@ -509,11 +565,12 @@ var JinagaCoordinator = (function () {
         if (this.network)
             this.network.fact(fact);
     };
-    JinagaCoordinator.prototype.onLoggedIn = function (userFact) {
+    JinagaCoordinator.prototype.onLoggedIn = function (userFact, profile) {
         this.userFact = userFact;
+        this.profile = profile;
         this.loggedIn = true;
         this.loginCallbacks.forEach(function (callback) {
-            callback(userFact);
+            callback(userFact, profile);
         });
         this.loginCallbacks = [];
     };
@@ -547,6 +604,9 @@ var Jinaga = (function () {
     Jinaga.prototype.watch = function (start, templates, resultAdded, resultRemoved) {
         var watch = this.coordinator.watch(JSON.parse(JSON.stringify(start)), templates, resultAdded, resultRemoved);
         return new WatchProxy(this.coordinator, watch);
+    };
+    Jinaga.prototype.query = function (start, templates, done) {
+        this.coordinator.query(JSON.parse(JSON.stringify(start)), templates, done);
     };
     Jinaga.prototype.login = function (callback) {
         this.coordinator.login(callback);
