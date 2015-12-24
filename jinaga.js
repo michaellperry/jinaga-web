@@ -572,7 +572,7 @@ var JinagaCoordinator = (function () {
                                 _this.messages.executeQuery(fact, inverse.added, _this.userFact, function (error3, added) {
                                     if (!error3) {
                                         added.forEach(function (fact) {
-                                            var mapping = watch.resultAdded(fact);
+                                            var mapping = watch.resultAdded(fact) || fact;
                                             watch.push(fact, mapping);
                                         });
                                     }
@@ -824,7 +824,7 @@ var MemoryProvider = (function () {
             node = new Node(fact, predecessors);
             for (var role in predecessors) {
                 var predecessorArray = predecessors[role];
-                predecessorArray[0].addSuccessor(role, node);
+                predecessorArray.forEach(function (pred) { return pred.addSuccessor(role, node); });
             }
             array.push(node);
             this.coordinator.onSaved(fact, source);
