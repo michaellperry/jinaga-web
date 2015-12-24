@@ -70,8 +70,18 @@ function _isEqual(o1, o2) {
                 if (!isArray(o2))
                     return false;
                 if ((length = o1.length) == o2.length) {
+                    // Order does not matter.
+                    var remaining = o2.slice();
                     for (key = 0; key < length; key++) {
-                        if (!_isEqual(o1[key], o2[key]))
+                        var found = false;
+                        for (var search = 0; search < remaining.length; search++) {
+                            if (_isEqual(o1[key], remaining[search])) {
+                                remaining.splice(search, 1);
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found)
                             return false;
                     }
                     return true;
@@ -297,6 +307,8 @@ function isPredecessor(value) {
         return false;
     if (value instanceof Date)
         return false;
+    if (Array.isArray(value))
+        return false;
     return true;
 }
 exports.isPredecessor = isPredecessor;
@@ -324,6 +336,9 @@ function computeMemberHash(pair) {
         case "object":
             if (value instanceof Date) {
                 valueHash = value.getTime();
+            }
+            else if (Array.isArray(value)) {
+                valueHash = value.reduce(function (sum, v) { return sum + computeHash(v); }, 0);
             }
             else {
                 valueHash = computeHash(value);
@@ -416,6 +431,7 @@ module.exports = JinagaDistributor;
 
 },{"engine.io-client":12}],5:[function(require,module,exports){
 var Interface = require("./interface");
+var computeHash = Interface.computeHash;
 var parse = require("./queryParser");
 var MemoryProvider = require("./memory");
 var QueryInverter = require("./queryInverter");
@@ -431,7 +447,33 @@ var Watch = (function () {
         this.resultAdded = resultAdded;
         this.resultRemoved = resultRemoved;
         this.inverses = inverses;
+        this.mappings = {};
     }
+    Watch.prototype.push = function (fact, mapping) {
+        if (!mapping)
+            return;
+        var hash = computeHash(fact);
+        var array = this.mappings[hash];
+        if (!array) {
+            array = [];
+            this.mappings[hash] = array;
+        }
+        array.push({ fact: fact, mapping: mapping });
+    };
+    Watch.prototype.pop = function (fact) {
+        var hash = computeHash(fact);
+        var array = this.mappings[hash];
+        if (!array)
+            return null;
+        for (var index = 0; index < array.length; index++) {
+            if (_isEqual(array[index].fact, fact)) {
+                var mapping = array[index].mapping;
+                array.splice(index, 1);
+                return mapping;
+            }
+        }
+        return null;
+    };
     return Watch;
 })();
 var JinagaCoordinator = (function () {
@@ -469,7 +511,11 @@ var JinagaCoordinator = (function () {
             this.watches.push(watch);
         }
         this.messages.executeQuery(start, query, this.userFact, function (error, results) {
-            results.map(resultAdded);
+            results.forEach(function (fact) {
+                var mapping = resultAdded(fact);
+                if (watch)
+                    watch.push(fact, mapping);
+            });
         });
         if (this.network) {
             this.network.watch(start, query);
@@ -525,14 +571,21 @@ var JinagaCoordinator = (function () {
                             if (inverse.added && watch.resultAdded) {
                                 _this.messages.executeQuery(fact, inverse.added, _this.userFact, function (error3, added) {
                                     if (!error3) {
-                                        added.map(watch.resultAdded);
+                                        added.forEach(function (fact) {
+                                            var mapping = watch.resultAdded(fact);
+                                            watch.push(fact, mapping);
+                                        });
                                     }
                                 });
                             }
                             if (inverse.removed && watch.resultRemoved) {
                                 _this.messages.executeQuery(fact, inverse.removed, _this.userFact, function (error2, added) {
                                     if (!error2) {
-                                        added.map(watch.resultRemoved);
+                                        added.forEach(function (fact) {
+                                            var mapping = watch.pop(fact);
+                                            if (mapping)
+                                                watch.resultRemoved(mapping);
+                                        });
                                     }
                                 });
                             }
@@ -542,7 +595,7 @@ var JinagaCoordinator = (function () {
             });
         });
     };
-    JinagaCoordinator.prototype.onReceived = function (fact, source) {
+    JinagaCoordinator.prototype.onReceived = function (fact, userFact, source) {
         this.messages.save(fact, source);
     };
     JinagaCoordinator.prototype.onDone = function (token) {
@@ -748,6 +801,7 @@ var MemoryProvider = (function () {
         return null;
     };
     MemoryProvider.prototype.insertNode = function (fact, source) {
+        var _this = this;
         var hash = computeHash(fact);
         var array = this.nodes[hash];
         if (!array) {
@@ -762,6 +816,9 @@ var MemoryProvider = (function () {
                 if (isPredecessor(value)) {
                     var predecessor = this.insertNode(value, source);
                     predecessors[field] = [predecessor];
+                }
+                else if (Array.isArray(value) && value.every(function (v) { return isPredecessor(v); })) {
+                    predecessors[field] = value.map(function (v) { return _this.insertNode(v, source); });
                 }
             }
             node = new Node(fact, predecessors);
