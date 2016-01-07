@@ -404,7 +404,7 @@ var JinagaDistributor = (function () {
         var _this = this;
         this.socket = new Socket(this.endpoint);
         this.socket.on("open", function () { _this.onOpen(); });
-        this.socket.on("error", function () { _this.onError(); });
+        this.socket.on("error", function (error) { _this.onError(error.message); });
     };
     JinagaDistributor.prototype.send = function (message) {
         if (this.isOpen)
@@ -414,6 +414,7 @@ var JinagaDistributor = (function () {
     };
     JinagaDistributor.prototype.onOpen = function () {
         var _this = this;
+        this.coordinator.onError(null);
         this.socket.on("message", function (message) { _this.onMessage(message); });
         this.socket.on("close", function () { _this.onClose(); });
         this.maxTimeout = 1 * 1000;
@@ -423,7 +424,8 @@ var JinagaDistributor = (function () {
         });
         this.pending = [];
     };
-    JinagaDistributor.prototype.onError = function () {
+    JinagaDistributor.prototype.onError = function (error) {
+        this.coordinator.onError(error);
         this.retry();
     };
     JinagaDistributor.prototype.onMessage = function (message) {
