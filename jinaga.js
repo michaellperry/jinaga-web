@@ -109,7 +109,7 @@ function _isEqual(o1, o2) {
                 for (key in o2) {
                     if (!keySet.hasOwnProperty(key) &&
                         key.charAt(0) !== '$' &&
-                        o2[key] === undefined &&
+                        o2[key] !== undefined &&
                         !isFunction(o2[key]))
                         return false;
                 }
@@ -151,7 +151,7 @@ var FactChannel = (function () {
     };
     FactChannel.prototype.messageReceived = function (message) {
         var _this = this;
-        if (message.type === 'fact' && message.id && message.fact) {
+        if (message.type === 'fact' && message.hasOwnProperty("id") && message.hasOwnProperty("fact")) {
             var fact = {};
             for (var field in message.fact) {
                 var value = message.fact[field];
@@ -211,7 +211,7 @@ var FactChannel = (function () {
         this.nodes[hash].push({ id: id, fact: fact });
     };
     FactChannel.prototype.parseMessageValue = function (value) {
-        if (typeof (value) === 'object' && value.hash && value.id) {
+        if (typeof (value) === 'object' && value.hasOwnProperty("hash") && value.hasOwnProperty("id")) {
             return this.lookupFact(value.hash, value.id);
         }
         else {
