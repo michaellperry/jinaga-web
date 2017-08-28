@@ -417,6 +417,8 @@ function parseDescriptiveString(descriptive, index) {
     }
 }
 function isPredecessor(value) {
+    if (value === null)
+        return false;
     if (typeof (value) !== "object")
         return false;
     if (value instanceof Date)
@@ -10489,6 +10491,9 @@ function findTarget(spec) {
         else {
             return [new ExistentialCondition(Quantifier.NotExists, steps)];
         }
+    }
+    if (Array.isArray(spec) && spec.length === 1) {
+        return findTarget(spec[0]);
     }
     if (spec instanceof Object) {
         var steps = [];
