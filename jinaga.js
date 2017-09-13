@@ -622,6 +622,13 @@ var FactChannel = require("./factChannel");
 var _isEqual = Collections._isEqual;
 var _some = Collections._some;
 var debug = Debug ? Debug("jinaga") : function () { };
+var Subscription = (function () {
+    function Subscription(start, joins) {
+        this.start = start;
+        this.joins = joins;
+    }
+    return Subscription;
+})();
 var Watch = (function () {
     function Watch(start, joins, resultAdded, resultRemoved, inverses, outer, backtrack) {
         this.start = start;
@@ -760,7 +767,7 @@ var JinagaCoordinator = (function () {
                 }
             };
             this.queries.push({ token: this.nextToken, callback: watchFinished });
-            this.network.watch(start, full, this.nextToken);
+            this.network.query(start, full, this.nextToken);
             this.nextToken++;
             this.watchCount++;
             if (this.watchCount === 1) {
@@ -768,6 +775,15 @@ var JinagaCoordinator = (function () {
             }
         }
         return watch;
+    };
+    JinagaCoordinator.prototype.subscribe = function (start, templates) {
+        var query = parse(templates);
+        var subscription = new Subscription(start, query);
+        if (this.network) {
+            this.network.watch(start, query, this.nextToken);
+            this.nextToken++;
+        }
+        return subscription;
     };
     JinagaCoordinator.prototype.query = function (start, templates, done) {
         var _this = this;
@@ -796,8 +812,10 @@ var JinagaCoordinator = (function () {
                 this.watches.splice(index, 1);
             }
         }
+    };
+    JinagaCoordinator.prototype.stopSubscription = function (subscription) {
         if (this.network) {
-            this.network.stopWatch(watch.start, watch.joins);
+            this.network.stopWatch(subscription.start, subscription.joins);
         }
     };
     JinagaCoordinator.prototype.login = function (callback) {
@@ -905,6 +923,18 @@ var JinagaCoordinator = (function () {
     };
     return JinagaCoordinator;
 })();
+var SubscriptionProxy = (function () {
+    function SubscriptionProxy(_coordinator, _subscription) {
+        this._coordinator = _coordinator;
+        this._subscription = _subscription;
+    }
+    SubscriptionProxy.prototype.stop = function () {
+        if (this._subscription) {
+            this._coordinator.stopSubscription(this._subscription);
+        }
+    };
+    return SubscriptionProxy;
+})();
 var WatchProxy = (function () {
     function WatchProxy(_coordinator, _watch) {
         this._coordinator = _coordinator;
@@ -949,6 +979,10 @@ var Jinaga = (function () {
     Jinaga.prototype.watch = function (start, templates, resultAdded, resultRemoved) {
         var watch = this.coordinator.watch(JSON.parse(JSON.stringify(start)), null, templates, function (mapping, result) { return resultAdded(result); }, resultRemoved);
         return new WatchProxy(this.coordinator, watch);
+    };
+    Jinaga.prototype.subscribe = function (start, templates) {
+        var watch = this.coordinator.subscribe(JSON.parse(JSON.stringify(start)), templates);
+        return new SubscriptionProxy(this.coordinator, watch);
     };
     Jinaga.prototype.query = function (start, templates, done) {
         this.coordinator.query(JSON.parse(JSON.stringify(start)), templates, done);
